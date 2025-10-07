@@ -1,7 +1,5 @@
 flask
-transformers
-torch
-Pillow
 requests
+Pillow
 groq
-gunicorn
+google-cloud-vision
