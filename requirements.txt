@@ -1,5 +1,7 @@
+flask
 transformers
 torch
-flask
+Pillow
 requests
-pillow
+groq
+gunicorn
