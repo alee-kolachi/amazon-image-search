@@ -7,15 +7,17 @@ from flask import Flask, request, jsonify
 from PIL import Image
 from io import BytesIO
 from urllib.parse import urlparse, unquote
-from transformers import pipeline
+from google.cloud import vision
 from groq import Groq
 
 app = Flask(__name__)
 
-# --- Initialize BLIP caption model ---
-print("Loading BLIP caption model...")
-captioner = pipeline("image-to-text", model="Salesforce/blip-image-captioning-base")
-print("Caption model ready.")
+# --- Initialize Google Vision client ---
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not GOOGLE_APPLICATION_CREDENTIALS:
+    raise ValueError("Please set GOOGLE_APPLICATION_CREDENTIALS environment variable with path to your JSON key.")
+
+vision_client = vision.ImageAnnotatorClient()
 
 # --- Initialize Groq client ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -34,7 +36,6 @@ def get_image_bytes(image_url=None, image_base64=None):
         return base64.b64decode(b)
     return None
 
-
 def clean_page_url_tokens(page_url: str):
     try:
         p = urlparse(page_url)
@@ -51,11 +52,9 @@ def clean_page_url_tokens(page_url: str):
 def extract_page_product_tokens(page_url: str):
     try:
         p = urlparse(page_url)
-        # Take host + path
         segments = [unquote(s) for s in p.path.split("/") if s]
         host = re.sub(r"^www\\.", "", p.netloc or "")
         tokens = " ".join([host] + segments)
-        # Remove common URL noise like numeric IDs, file extensions
         tokens = re.sub(r'[\d]+', '', tokens)
         tokens = re.sub(r'\.html|\.php', '', tokens)
         tokens = re.sub(r'[-_]+', ' ', tokens)
@@ -116,11 +115,13 @@ def analyze():
 
         # 1️⃣ Load image
         img_bytes = get_image_bytes(image_url, image_base64)
-        img = Image.open(BytesIO(img_bytes)).convert("RGB")
 
-        # 2️⃣ BLIP caption
-        caption = captioner(img)[0]["generated_text"].strip()
-        print("BLIP Caption:", caption)
+        # 2️⃣ Google Vision API caption
+        image = vision.Image(content=img_bytes)
+        response = vision_client.label_detection(image=image)
+        labels = [label.description for label in response.label_annotations]
+        caption = ", ".join(labels) if labels else "Unknown product"
+        print("Google Vision Labels:", caption)
 
         # 3️⃣ Extract URL tokens
         url_tokens = clean_url_tokens(image_url) if image_url else ""
@@ -141,7 +142,6 @@ def analyze():
         if page_url:
             r = requests.get(page_url, timeout=5)
             r.raise_for_status()
-            # simple extraction of <title>
             m = re.search(r'<title>(.*?)</title>', r.text, re.I)
             if m:
                 page_text = m.group(1)
@@ -158,8 +158,6 @@ def analyze():
             )
         }
 
-
-
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[system_msg, user_msg],
@@ -169,13 +167,11 @@ def analyze():
             stream=True
         )
 
-        # 5️⃣ Collect streaming text
         raw_text = ""
         for chunk in completion:
             raw_text += chunk.choices[0].delta.content or ""
         print("Raw Groq output:", raw_text)
 
-        # 6️⃣ Post-process
         final_title = clean_final_title(raw_text)
         print("Final Clean Title:", final_title)
 
@@ -193,3 +189,6 @@ def analyze():
 # --- Run ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 3000)), debug=True)
+
+from mangum import Mangum
+handler = Mangum(app)
