@@ -4,8 +4,6 @@ import re
 import base64
 import requests
 from flask import Flask, request, jsonify
-from PIL import Image
-from io import BytesIO
 from urllib.parse import urlparse, unquote
 from google.cloud import vision
 from groq import Groq
@@ -110,13 +108,10 @@ def analyze():
         return jsonify({"error": "imageUrl or imageBase64 required"}), 400
 
     try:
-        print("Received image URL:", image_url)
-        print("Received page URL:", page_url)
-
         # 1️⃣ Load image
         img_bytes = get_image_bytes(image_url, image_base64)
 
-        # 2️⃣ Google Vision API caption
+        # 2️⃣ Google Vision API labels
         image = vision.Image(content=img_bytes)
         response = vision_client.label_detection(image=image)
         labels = [label.description for label in response.label_annotations]
@@ -154,7 +149,7 @@ def analyze():
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
                 "Return a single concise product title optimized for Amazon search, "
-                "prioritize words from the URL if they clearly indicate the product. Use product codes/size/color/style or anything that clearly defined the product. The goal is to describe the product in a best way."
+                "prioritize words from the URL if they clearly indicate the product. Use product codes/size/color/style or anything that clearly defined the product."
             )
         }
 
@@ -189,6 +184,3 @@ def analyze():
 # --- Run ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 3000)), debug=True)
-
-from mangum import Mangum
-handler = Mangum(app)
