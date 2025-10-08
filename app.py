@@ -26,23 +26,27 @@ client = Groq(api_key=GROQ_API_KEY)
 # --- Utility functions ---
 def get_image_bytes(image_url=None, image_base64=None):
     if image_url:
-        r = requests.get(image_url, timeout=10)
-        r.raise_for_status()
-        return r.content
+        try:
+            r = requests.get(image_url, timeout=10)
+            r.raise_for_status()
+            return r.content
+        except Exception as e:
+            # bubble a clear exception up so caller can decide, but include context
+            raise ValueError(f"Failed to fetch image from URL: {e}")
     if image_base64:
-        b = re.sub(r"^data:image/\\w+;base64,", "", image_base64)
+        b = re.sub(r"^data:image/\w+;base64,", "", image_base64)
         return base64.b64decode(b)
     return None
 
 def clean_page_url_tokens(page_url: str):
     try:
         p = urlparse(page_url)
-        host = re.sub(r"^www\\.", "", p.netloc or "", flags=re.I).replace(".", " ")
+        host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
         path = p.path or ""
         segments = [unquote(s) for s in path.split("/") if s]
         combined = f"{host} {' '.join(segments)}"
-        combined = re.sub(r"[_\\-]+", " ", combined)
-        combined = re.sub(r"\\s+", " ", combined).strip()
+        combined = re.sub(r"[_\-]+", " ", combined)
+        combined = re.sub(r"\s+", " ", combined).strip()
         return combined
     except Exception:
         return ""
@@ -51,7 +55,7 @@ def extract_page_product_tokens(page_url: str):
     try:
         p = urlparse(page_url)
         segments = [unquote(s) for s in p.path.split("/") if s]
-        host = re.sub(r"^www\\.", "", p.netloc or "")
+        host = re.sub(r"^www\.", "", p.netloc or "")
         tokens = " ".join([host] + segments)
         tokens = re.sub(r'[\d]+', '', tokens)
         tokens = re.sub(r'\.html|\.php', '', tokens)
@@ -64,15 +68,15 @@ def extract_page_product_tokens(page_url: str):
 def clean_url_tokens(image_url: str):
     try:
         p = urlparse(image_url)
-        host = re.sub(r"^www\\.", "", p.netloc or "", flags=re.I).replace(".", " ")
+        host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
         path = p.path or ""
         segments = [unquote(s) for s in path.split("/") if s]
         file_part = segments[-1] if segments else ""
-        base = re.sub(r"\\.\w+$", "", file_part)
+        base = re.sub(r"\.\w+$", "", file_part)
         combined = f"{host} {' '.join(segments)} {base}"
-        combined = re.sub(r"[_\\-]+", " ", combined)
-        combined = re.sub(r"\\b(AC|SX|UX)\\d+\\b", "", combined)
-        return re.sub(r"\\s+", " ", combined).strip()
+        combined = re.sub(r"[_\-]+", " ", combined)
+        combined = re.sub(r"\b(AC|SX|UX)\d+\b", "", combined)
+        return re.sub(r"\s+", " ", combined).strip()
     except Exception:
         return ""
 
@@ -83,6 +87,16 @@ def clean_final_title(s):
     s = re.sub(r'[^A-Za-z0-9 \-]', '', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
+
+# Small deterministic fallback builder if LLM fails
+def fallback_title(caption, url_tokens, page_url_tokens, page_text):
+    # prefer first Vision label, then url tokens, then page text
+    first_label = caption.split(",")[0] if caption else ""
+    parts = [first_label, url_tokens, page_url_tokens, page_text]
+    combined = " ".join([p for p in parts if p])
+    # limit length
+    combined = combined.strip()[:120]
+    return clean_final_title(combined)
 
 # --- CORS ---
 @app.after_request
@@ -111,18 +125,44 @@ def analyze():
         # 1️⃣ Load image
         img_bytes = get_image_bytes(image_url, image_base64)
 
-        # 2️⃣ Google Vision API labels
-        image = vision.Image(content=img_bytes)
-        response = vision_client.label_detection(image=image)
-        labels = [label.description for label in response.label_annotations]
-        caption = ", ".join(labels) if labels else "Unknown product"
+        # 2️⃣ Google Vision API labels (non-fatal)
+        labels = []
+        caption = "Unknown product"
+        try:
+            image = vision.Image(content=img_bytes)
+            response = vision_client.label_detection(image=image)
+            # Some clients put errors on response.error
+            if getattr(response, "error", None) and getattr(response.error, "message", None):
+                print("Vision API returned error:", response.error.message)
+            else:
+                labels = [label.description for label in response.label_annotations] or []
+                if labels:
+                    caption = ", ".join(labels)
+        except Exception as e:
+            print("Warning: Google Vision failed:", e)
+            # proceed with empty/unknown caption
+
         print("Google Vision Labels:", caption)
 
         # 3️⃣ Extract URL tokens
         url_tokens = clean_url_tokens(image_url) if image_url else ""
         print("URL Tokens:", url_tokens)
 
-        # 4️⃣ Groq LLM prompt
+        # 4️⃣ Page fetch (non-fatal) and extract title
+        page_text = ""
+        page_url_tokens = extract_page_product_tokens(page_url) if page_url else ""
+        if page_url:
+            try:
+                r = requests.get(page_url, timeout=5)
+                r.raise_for_status()
+                m = re.search(r'<title>(.*?)</title>', r.text, re.I)
+                if m:
+                    page_text = m.group(1)
+            except Exception as e:
+                # don't fail entire request because page fetch was forbidden / blocked / timed out
+                print(f"Warning: couldn't fetch page_url '{page_url}': {e}")
+
+        # 5️⃣ Groq LLM prompt
         system_msg = {
             "role": "system",
             "content": (
@@ -132,14 +172,6 @@ def analyze():
                 "Output ONLY the final title."
             )
         }
-        page_url_tokens = extract_page_product_tokens(page_url)
-        page_text = ""
-        if page_url:
-            r = requests.get(page_url, timeout=5)
-            r.raise_for_status()
-            m = re.search(r'<title>(.*?)</title>', r.text, re.I)
-            if m:
-                page_text = m.group(1)
 
         user_msg = {
             "role": "user",
@@ -153,21 +185,58 @@ def analyze():
             )
         }
 
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[system_msg, user_msg],
-            temperature=0.2,
-            max_completion_tokens=60,
-            top_p=1,
-            stream=True
-        )
-
         raw_text = ""
-        for chunk in completion:
-            raw_text += chunk.choices[0].delta.content or ""
+        try:
+            completion = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[system_msg, user_msg],
+                temperature=0.2,
+                max_completion_tokens=60,
+                top_p=1,
+                stream=True
+            )
+
+            for chunk in completion:
+                # stream chunks; guard in case chunk lacks expected fields
+                try:
+                    delta = chunk.choices[0].delta
+                    raw_text += delta.content or ""
+                except Exception:
+                    # skip malformed chunk
+                    continue
+
+        except Exception as e:
+            print("Warning: Groq streaming failed:", e)
+            # Try a non-streaming attempt as a best-effort fallback
+            try:
+                resp = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[system_msg, user_msg],
+                    temperature=0.2,
+                    max_completion_tokens=60,
+                    top_p=1,
+                    stream=False
+                )
+                # depending on response shape, try to extract text
+                if resp and getattr(resp, "choices", None):
+                    # some SDKs use message/content
+                    choice = resp.choices[0]
+                    if hasattr(choice, "message") and getattr(choice.message, "content", None):
+                        raw_text = choice.message.content
+                    elif getattr(choice, "text", None):
+                        raw_text = choice.text
+            except Exception as e2:
+                print("Warning: Groq non-streaming fallback also failed:", e2)
+                raw_text = ""
+
         print("Raw Groq output:", raw_text)
 
         final_title = clean_final_title(raw_text)
+        if not final_title:
+            # deterministic fallback so you always return something
+            final_title = fallback_title(caption, url_tokens, page_url_tokens, page_text)
+            print("Using fallback title:", final_title)
+
         print("Final Clean Title:", final_title)
 
         return jsonify({
@@ -175,10 +244,11 @@ def analyze():
             "url_tokens": url_tokens,
             "page_url": page_url,
             "title": final_title
-        })
+        }), 200
 
     except Exception as e:
-        print("Error in analyze:", e)
+        # last-resort: return a useful error without crashing the server process
+        print("Error in analyze (unexpected):", e)
         return jsonify({"error": str(e)}), 500
 
 # --- Run ---
