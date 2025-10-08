@@ -181,7 +181,7 @@ def analyze():
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
                 "Return a single product title optimized for Amazon search, "
-                "prioritize words from the URL if they clearly indicate the product. Use product codes/size/color/style or anything that clearly defined the product. You should add details/features in the title."
+                "prioritize words from the URL if they clearly indicate the product. Use product codes/size/color/style or anything that clearly defined the product. You should add features in the title and not details"
             )
         }
 
