@@ -1,4 +1,4 @@
-# app.py
+# app.py (fixed)
 import os
 import re
 import io
@@ -17,7 +17,7 @@ from groq import Groq
 from PIL import Image, ExifTags
 
 # --- Configurable constants ---
-MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))  # resize long side to this (px)
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))
 VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.40"))
 PAGE_FETCH_TIMEOUT = float(os.getenv("PAGE_FETCH_TIMEOUT", "5"))
 IMAGE_FETCH_TIMEOUT = float(os.getenv("IMAGE_FETCH_TIMEOUT", "10"))
@@ -30,7 +30,7 @@ log = logging.getLogger("app")
 # --- Flask App ---
 app = Flask(__name__)
 
-# --- Rate limiter: limit to 10 requests per minute per IP ---
+# --- Rate limiter ---
 limiter = Limiter(
     app,
     key_func=get_remote_address,
@@ -38,7 +38,6 @@ limiter = Limiter(
 )
 
 import csv
-
 SEARCH_LOG_FILE = "/home/ubuntu/amazon-image-search/searches.csv"
 
 def log_search(image_url, page_url, title):
@@ -50,13 +49,13 @@ def log_search(image_url, page_url, title):
     except Exception as e:
         log.warning("Failed to write search log: %s", e)
 
-# --- Initialize Google Vision client ---
+# --- Google Vision client ---
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 if not GOOGLE_APPLICATION_CREDENTIALS:
     raise ValueError("Please set GOOGLE_APPLICATION_CREDENTIALS environment variable with path to your JSON key.")
 vision_client = vision.ImageAnnotatorClient()
 
-# --- Initialize Groq client ---
+# --- Groq client ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("Please set GROQ_API_KEY environment variable.")
@@ -88,32 +87,22 @@ def get_image_bytes(image_url: Optional[str] = None, image_base64: Optional[str]
 def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> bytes:
     try:
         with Image.open(io.BytesIO(img_bytes)) as im:
-            # Fix EXIF orientation if present
             try:
                 for orientation in ExifTags.TAGS.keys():
                     if ExifTags.TAGS[orientation] == 'Orientation':
                         break
                 exif = im._getexif()
-                if exif is not None:
-                    orientation_value = exif.get(orientation)
-                    if orientation_value == 3:
-                        im = im.rotate(180, expand=True)
-                    elif orientation_value == 6:
-                        im = im.rotate(270, expand=True)
-                    elif orientation_value == 8:
-                        im = im.rotate(90, expand=True)
+                if exif:
+                    o = exif.get(orientation)
+                    if o == 3: im = im.rotate(180, expand=True)
+                    elif o == 6: im = im.rotate(270, expand=True)
+                    elif o == 8: im = im.rotate(90, expand=True)
             except Exception:
                 pass
-
-            # Resize if too large
             w, h = im.size
-            long_side = max(w, h)
-            if long_side > max_side:
-                scale = max_side / float(long_side)
-                new_size = (int(w * scale), int(h * scale))
-                im = im.resize(new_size, Image.LANCZOS)
-
-            # Convert to RGB and save as JPEG
+            if max(w, h) > max_side:
+                scale = max_side / float(max(w, h))
+                im = im.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
             if im.mode != "RGB":
                 im = im.convert("RGB")
             out = io.BytesIO()
@@ -127,12 +116,9 @@ def clean_page_url_tokens(page_url: str):
     try:
         p = urlparse(page_url)
         host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
-        path = p.path or ""
-        segments = [unquote(s) for s in path.split("/") if s]
+        segments = [unquote(s) for s in (p.path or "").split("/") if s]
         combined = f"{host} {' '.join(segments)}"
-        combined = re.sub(r"[_\-]+", " ", combined)
-        combined = re.sub(r"\s+", " ", combined).strip()
-        return combined
+        return re.sub(r"[_\-]+", " ", combined).strip()
     except Exception:
         return ""
 
@@ -145,17 +131,15 @@ def extract_page_product_tokens(page_url: str):
         tokens = re.sub(r'[\d]+', '', tokens)
         tokens = re.sub(r'\.html|\.php', '', tokens)
         tokens = re.sub(r'[-_]+', ' ', tokens)
-        tokens = re.sub(r'\s+', ' ', tokens).strip()
-        return tokens
-    except:
+        return re.sub(r'\s+', ' ', tokens).strip()
+    except Exception:
         return ""
 
 def clean_url_tokens(image_url: str):
     try:
         p = urlparse(image_url)
         host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
-        path = p.path or ""
-        segments = [unquote(s) for s in path.split("/") if s]
+        segments = [unquote(s) for s in (p.path or "").split("/") if s]
         file_part = segments[-1] if segments else ""
         base = re.sub(r"\.\w+$", "", file_part)
         combined = f"{host} {' '.join(segments)} {base}"
@@ -170,8 +154,7 @@ def clean_final_title(s: str) -> str:
         return ""
     s = re.sub(r"https?://\S+|www\.\S+|\bamazon\.com\b", "", s, flags=re.I)
     s = re.sub(r'[^A-Za-z0-9 \-]', '', s)
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
+    return re.sub(r'\s+', ' ', s).strip()
 
 def safe_extract_title_from_groq_stream_or_resp(resp_iterable_or_obj) -> str:
     raw_text = ""
@@ -205,7 +188,7 @@ def cors_headers(resp):
 
 # ----------------- Main endpoint -----------------
 @app.route("/api/analyze", methods=["POST", "OPTIONS"])
-@limiter.limit("10 per minute")  # rate limit per IP
+@limiter.limit("10 per minute")
 def analyze():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -214,6 +197,7 @@ def analyze():
     image_url = data.get("imageUrl")
     page_url = data.get("pageUrl", "")
     image_base64 = data.get("imageBase64")
+
     page_url_tokens = clean_page_url_tokens(page_url) if page_url else ""
     log.info("Page URL Tokens: %s", page_url_tokens)
 
@@ -230,27 +214,23 @@ def analyze():
         try:
             image = vision.Image(content=img_bytes)
             response = vision_client.label_detection(image=image, max_results=10)
-            if getattr(response, "label_annotations", None):
-                for lab in response.label_annotations:
-                    name = getattr(lab, "description", None)
-                    score = float(getattr(lab, "score", 0.0))
-                    labels_with_confidence.append({"name": name, "confidence": score})
-                    if score >= VISION_MIN_CONFIDENCE:
-                        labels.append(name)
-                if labels:
-                    caption = ", ".join(labels)
-                elif labels_with_confidence:
-                    caption = labels_with_confidence[0]["name"]
+            for lab in getattr(response, "label_annotations", []):
+                name = getattr(lab, "description", None)
+                score = float(getattr(lab, "score", 0.0))
+                labels_with_confidence.append({"name": name, "confidence": score})
+                if score >= VISION_MIN_CONFIDENCE:
+                    labels.append(name)
+            caption = ", ".join(labels) if labels else (labels_with_confidence[0]["name"] if labels_with_confidence else caption)
         except Exception as e:
             log.warning("Google Vision label_detection failed: %s", e)
 
         log.info("Vision method: %s; caption: %s", vision_method, caption)
 
-        # --- URL tokens ---
         url_tokens = clean_url_tokens(image_url) if image_url else ""
         page_text = ""
         page_url_tokens = extract_page_product_tokens(page_url) if page_url else ""
 
+        # --- Fetch page URL if available ---
         if page_url:
             headers = {"User-Agent": "product-title-bot/1.0"}
             last_exc = None
@@ -266,6 +246,8 @@ def analyze():
                     last_exc = e
                     log.warning("Attempt %s: couldn't fetch page_url '%s': %s", attempt + 1, page_url, e)
                     time.sleep(0.2)
+            if not page_text:
+                log.info("Page fetch failed or timed out; continuing without page content")
 
         # --- Groq LLM ---
         system_msg = {
@@ -316,15 +298,12 @@ def analyze():
             except Exception as e2:
                 log.warning("Groq fallback failed: %s", e2)
 
-        # --- Final title ---
         final_title = clean_final_title(raw_text)
         if not final_title:
             final_title = labels[0] if labels else "Product"
             log.info("Using fallback title: %s", final_title)
 
         log.info("Final Clean Title: %s", final_title)
-
-        # --- Log searches ---
         log_search(image_url, page_url, final_title)
 
         return jsonify({
