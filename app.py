@@ -37,13 +37,16 @@ limiter = Limiter(
     default_limits=["10 per minute"]
 )
 
-# --- Search logging ---
-SEARCH_LOG_FILE = "searches.log"
+import csv
+
+SEARCH_LOG_FILE = "/home/ubuntu/amazon-image-search/searches.csv"
+
 def log_search(image_url, page_url, title):
     try:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        with open(SEARCH_LOG_FILE, "a") as f:
-            f.write(f"{timestamp}\t{image_url}\t{page_url}\t{title}\n")
+        with open(SEARCH_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([timestamp, image_url, page_url, title])
     except Exception as e:
         log.warning("Failed to write search log: %s", e)
 
