@@ -253,8 +253,12 @@ def analyze():
             "content": (
                 "You are an assistant that generates a single, concise Amazon product title. "
                 "You are given: image captions, page URL, and image URL. "
-                "STRICTLY INCLUDE the brand/product name if present, and also include these attributes if present: color, size, style, main features. "
-                "Focus on keywords shoppers would use. Avoid irrelevant details, numbers, or technical words from URLs. "
+                "STRICTLY include the brand if present. "
+                "If the product is clothing, strictly include color; "
+                "if it is jewelry, tools, or metallic, strictly include material. "
+                "Also include other relevant attributes like size, style, and main features if present. "
+                "Ignore irrelevant details, numbers, or technical words from URLs or image names. "
+                "Focus on keywords shoppers would use. "
                 "Output ONLY the final title in natural Amazon style, 3-7 words if possible."
             )
         }
@@ -266,9 +270,10 @@ def analyze():
                 f"Page URL (send complete URL as-is): {page_url}\n"
                 f"Image URL (send complete URL as-is): {image_url}\n"
                 "Generate a concise, keyword-optimized Amazon product title. "
-                "If the caption lists a color, size, style, or brand, include them in the title."
+                "Include brand, color, material, size, style, and main features when relevant."
             )
         }
+
 
 
         # --- Log what is being sent to LLM ---
