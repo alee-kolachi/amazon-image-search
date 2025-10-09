@@ -274,7 +274,7 @@ def analyze():
                 "You are given: image captions, image URL tokens, page URL tokens, and page text. "
                 "IGNORE irrelevant technical words, file names, numbers, or 'demonstration' in URLs. "
                 "INCLUDE the product type, main features, color, size, and style relevant to Amazon search. "
-                "Focus on keywords that shoppers would use to search. "
+                "Focus on keywords that shoppers would use to search. Ignore keywords that users may not include in search results"
                 "Avoid overly long or redundant details. "
                 "Always include the color from the image caption if given. Give more focus on page URL but if it doesn't help then you can give focus to the captions"
                 "Output ONLY the final title in a natural Amazon style."
@@ -287,7 +287,7 @@ def analyze():
                 f"Image URL tokens: {url_tokens}\n"
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
-                "Generate a concise, keyword-optimized Amazon product title (max 8-10 words if possible)."
+                "Generate a concise, keyword-optimized Amazon product title (max 3-6 words if possible)."
             )
         }
 
