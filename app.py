@@ -15,9 +15,10 @@ from flask_limiter.util import get_remote_address
 from google.cloud import vision
 from groq import Groq
 from PIL import Image, ExifTags
+from bs4 import BeautifulSoup  # new dependency for robust scraping
 
 # --- Configurable constants ---
-MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))  # resize long side to this (px)
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))
 VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.40"))
 PAGE_FETCH_TIMEOUT = float(os.getenv("PAGE_FETCH_TIMEOUT", "5"))
 IMAGE_FETCH_TIMEOUT = float(os.getenv("IMAGE_FETCH_TIMEOUT", "10"))
@@ -31,7 +32,7 @@ log = logging.getLogger("app")
 app = Flask(__name__)
 
 limiter = Limiter(
-    key_func=get_remote_address,  # do NOT also pass app as first positional argument
+    key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"]
 )
 limiter.init_app(app)
@@ -112,7 +113,6 @@ def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> 
                 new_size = (int(w * scale), int(h * scale))
                 im = im.resize(new_size, Image.LANCZOS)
 
-            # Convert to RGB and save as JPEG
             if im.mode != "RGB":
                 im = im.convert("RGB")
             out = io.BytesIO()
@@ -121,48 +121,6 @@ def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> 
     except Exception as e:
         log.warning("Image preprocessing failed, returning original bytes: %s", e)
         return img_bytes
-
-def clean_page_url_tokens(page_url: str):
-    try:
-        p = urlparse(page_url)
-        host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
-        path = p.path or ""
-        segments = [unquote(s) for s in path.split("/") if s]
-        combined = f"{host} {' '.join(segments)}"
-        combined = re.sub(r"[_\-]+", " ", combined)
-        combined = re.sub(r"\s+", " ", combined).strip()
-        return combined
-    except Exception:
-        return ""
-
-def extract_page_product_tokens(page_url: str):
-    try:
-        p = urlparse(page_url)
-        segments = [unquote(s) for s in p.path.split("/") if s]
-        host = re.sub(r"^www\.", "", p.netloc or "")
-        tokens = " ".join([host] + segments)
-        tokens = re.sub(r'[\d]+', '', tokens)
-        tokens = re.sub(r'\.html|\.php', '', tokens)
-        tokens = re.sub(r'[-_]+', ' ', tokens)
-        tokens = re.sub(r'\s+', ' ', tokens).strip()
-        return tokens
-    except:
-        return ""
-
-def clean_url_tokens(image_url: str):
-    try:
-        p = urlparse(image_url)
-        host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
-        path = p.path or ""
-        segments = [unquote(s) for s in path.split("/") if s]
-        file_part = segments[-1] if segments else ""
-        base = re.sub(r"\.\w+$", "", file_part)
-        combined = f"{host} {' '.join(segments)} {base}"
-        combined = re.sub(r"[_\-]+", " ", combined)
-        combined = re.sub(r"\b(AC|SX|UX)\d+\b", "", combined)
-        return re.sub(r"\s+", " ", combined).strip()
-    except Exception:
-        return ""
 
 def clean_final_title(s: str) -> str:
     if not s:
@@ -195,6 +153,38 @@ def safe_extract_title_from_groq_stream_or_resp(resp_iterable_or_obj) -> str:
         raw_text = ""
     return raw_text or ""
 
+def extract_product_info(html: str):
+    """Robustly extract product title and description from HTML."""
+    soup = BeautifulSoup(html, "html.parser")
+    title = None
+    description = None
+
+    # Title candidates
+    title_selectors = [
+        "#productTitle", ".product-title", "h1.product-name", "h1"
+    ]
+    for sel in title_selectors:
+        el = soup.select_one(sel)
+        if el and el.get_text(strip=True):
+            title = el.get_text(strip=True)
+            break
+
+    # Description candidates
+    desc_selectors = [
+        "#productDescription", ".product-description", ".description", "meta[name='description']"
+    ]
+    for sel in desc_selectors:
+        el = soup.select_one(sel)
+        if el:
+            if el.name == "meta":
+                description = el.get("content", "")
+            else:
+                description = el.get_text(strip=True)
+            if description:
+                break
+
+    return title or "", description or ""
+
 # ----------------- CORS -----------------
 @app.after_request
 def cors_headers(resp):
@@ -204,7 +194,7 @@ def cors_headers(resp):
 
 # ----------------- Main endpoint -----------------
 @app.route("/api/analyze", methods=["POST", "OPTIONS"])
-@limiter.limit("10 per minute")  # rate limit per IP
+@limiter.limit("10 per minute")
 def analyze():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -213,8 +203,6 @@ def analyze():
     image_url = data.get("imageUrl")
     page_url = data.get("pageUrl", "")
     image_base64 = data.get("imageBase64")
-    page_url_tokens = clean_page_url_tokens(page_url) if page_url else ""
-    log.info("Page URL Tokens: %s", page_url_tokens)
 
     if not image_url and not image_base64:
         return jsonify({"error": "imageUrl or imageBase64 required"}), 400
@@ -236,20 +224,12 @@ def analyze():
                     labels_with_confidence.append({"name": name, "confidence": score})
                     if score >= VISION_MIN_CONFIDENCE:
                         labels.append(name)
-                if labels:
-                    caption = ", ".join(labels)
-                elif labels_with_confidence:
-                    caption = labels_with_confidence[0]["name"]
+                caption = ", ".join(labels) if labels else (labels_with_confidence[0]["name"] if labels_with_confidence else "Unknown product")
         except Exception as e:
             log.warning("Google Vision label_detection failed: %s", e)
 
-        log.info("Vision method: %s; caption: %s", vision_method, caption)
-
-        # --- URL tokens ---
-        url_tokens = clean_url_tokens(image_url) if image_url else ""
+        # --- Page scraping ---
         page_text = ""
-        page_url_tokens = extract_page_product_tokens(page_url) if page_url else ""
-
         if page_url:
             headers = {"User-Agent": "product-title-bot/1.0"}
             last_exc = None
@@ -257,26 +237,25 @@ def analyze():
                 try:
                     r = requests.get(page_url, headers=headers, timeout=PAGE_FETCH_TIMEOUT)
                     r.raise_for_status()
-                    m = re.search(r'<title>(.*?)</title>', r.text, re.I | re.S)
-                    if m:
-                        page_text = m.group(1).strip()
+                    title_text, description_text = extract_product_info(r.text)
+                    page_text = f"{title_text}. {description_text}" if title_text or description_text else ""
                     break
                 except Exception as e:
                     last_exc = e
-                    log.warning("Attempt %s: couldn't fetch page_url '%s': %s", attempt + 1, page_url, e)
+                    log.warning("Attempt %s: couldn't fetch page '%s': %s", attempt + 1, page_url, e)
                     time.sleep(0.2)
+            if not page_text:
+                log.info("Page scraping failed, continuing without page data: %s", last_exc)
 
         # --- Groq LLM ---
         system_msg = {
             "role": "system",
             "content": (
                 "You are an assistant that generates a single, concise Amazon product title. "
-                "You are given: image captions, image URL tokens, page URL tokens, and page text. "
+                "You are given: image captions, page text, and URL tokens. "
                 "IGNORE irrelevant technical words, file names, numbers, or 'demonstration' in URLs. "
                 "INCLUDE the product type, main features, color, size, and style relevant to Amazon search. "
-                "Focus on keywords that shoppers would use to search. Ignore keywords that users may not include in search results"
-                "Avoid overly long or redundant details. "
-                "Always include the color from the image caption if given. Give more focus on page URL but if it doesn't help then you can give focus to the captions"
+                "Focus on keywords shoppers would use. Avoid overly long or redundant details. "
                 "Output ONLY the final title in a natural Amazon style."
             )
         }
@@ -284,10 +263,9 @@ def analyze():
             "role": "user",
             "content": (
                 f"Image caption: {caption}\n"
-                f"Image URL tokens: {url_tokens}\n"
-                f"Page URL tokens: {page_url_tokens}\n"
-                f"Page title or context: {page_text}\n"
-                "Generate a concise, keyword-optimized Amazon product title (max 3-6 words if possible)."
+                f"Page URL: {page_url}\n"
+                f"Page text: {page_text}\n"
+                "Generate a concise, keyword-optimized Amazon product title (3-6 words if possible)."
             )
         }
 
@@ -317,22 +295,17 @@ def analyze():
             except Exception as e2:
                 log.warning("Groq fallback failed: %s", e2)
 
-        # --- Final title ---
         final_title = clean_final_title(raw_text)
         if not final_title:
             final_title = labels[0] if labels else "Product"
             log.info("Using fallback title: %s", final_title)
 
-        log.info("Final Clean Title: %s", final_title)
-
-        # --- Log searches ---
         log_search(image_url, page_url, final_title)
 
         return jsonify({
             "caption": caption,
             "vision_method": vision_method,
             "labels_with_confidence": labels_with_confidence,
-            "url_tokens": url_tokens,
             "page_url": page_url,
             "title": final_title
         }), 200
