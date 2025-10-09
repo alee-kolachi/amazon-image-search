@@ -254,9 +254,7 @@ def analyze():
                 "You are an assistant that generates a single, concise Amazon product title. "
                 "You are given: image captions, page URL, and image URL. "
                 "Your goal is to understand the product from these inputs and produce a high-quality, natural-sounding Amazon title. "
-                "IMPORTANT: MUST Include brand, color, material, size, style, and main features if they are present. "
-                "Do not include irrelevant details from URLs or image names. "
-                "Focus on what a shopper would expect in a product title. "
+                "IMPORTANT: MUST Include brand, color, material, size, style, and main features if they are present."
                 "Output ONLY the final title in natural Amazon style, 3-7 words if possible."
             )
         }
