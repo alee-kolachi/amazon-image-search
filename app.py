@@ -253,12 +253,10 @@ def analyze():
             "content": (
                 "You are an assistant that generates a single, concise Amazon product title. "
                 "You are given: image captions, page URL, and image URL. "
-                "STRICTLY include the brand if present. "
-                "If the product is clothing, strictly include color; "
-                "if it is jewelry, tools, or metallic, strictly include material. "
-                "Also include other relevant attributes like size, style, and main features if present. "
-                "Ignore irrelevant details, numbers, or technical words from URLs or image names. "
-                "Focus on keywords shoppers would use. "
+                "Your goal is to understand the product from these inputs and produce a high-quality, natural-sounding Amazon title. "
+                "Include brand, color, material, size, style, and main features if they are present and relevant. "
+                "Do not include irrelevant details, numbers, or technical words from URLs or image names. "
+                "Focus on what a shopper would expect in a product title. "
                 "Output ONLY the final title in natural Amazon style, 3-7 words if possible."
             )
         }
@@ -269,10 +267,10 @@ def analyze():
                 f"Image caption (comma-separated attributes): {caption}\n"
                 f"Page URL (send complete URL as-is): {page_url}\n"
                 f"Image URL (send complete URL as-is): {image_url}\n"
-                "Generate a concise, keyword-optimized Amazon product title. "
-                "Include brand, color, material, size, style, and main features when relevant."
+                "Generate a concise, keyword-optimized Amazon product title that accurately reflects the product."
             )
         }
+
 
 
 
@@ -282,7 +280,7 @@ def analyze():
         raw_text = ""
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 messages=[system_msg, user_msg],
                 temperature=0.2,
                 max_completion_tokens=60,
@@ -294,7 +292,7 @@ def analyze():
             log.warning("Groq streaming failed: %s", e)
             try:
                 resp = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-8b-instant",
                     messages=[system_msg, user_msg],
                     temperature=0.2,
                     max_completion_tokens=60,
