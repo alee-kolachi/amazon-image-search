@@ -274,7 +274,7 @@ def analyze():
                 "You are an assistant that generates a single concise Amazon product title. "
                 "You are given: image captions, image URL information, and page URL tokens. "
                 "Ignore irrelevant technical words or file names from URLs such as 'png', 'upload', 'wikimedia', numbers, or 'demonstration'. "
-                "Include only the product type, features, color, size, or style relevant to Amazon search. "
+                "DO INCLUDE the product type, features, color, size, or style relevant to Amazon search. "
                 "Output ONLY the final title."
             )
         }
