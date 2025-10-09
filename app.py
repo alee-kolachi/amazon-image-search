@@ -271,7 +271,7 @@ def analyze():
         system_msg = {
             "role": "system",
             "content": (
-                "You are an assistant that generates a single concise Amazon product title. "
+                "You are an assistant that gives color of product"
             )
         }
 
