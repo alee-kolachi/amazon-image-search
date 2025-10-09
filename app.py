@@ -282,7 +282,7 @@ def analyze():
         raw_text = ""
         try:
             completion = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="openai/gpt-oss-120b",
                 messages=[system_msg, user_msg],
                 temperature=0.2,
                 max_completion_tokens=60,
