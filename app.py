@@ -10,13 +10,15 @@ from urllib.parse import urlparse, unquote
 
 import requests
 from flask import Flask, request, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from google.cloud import vision
 from groq import Groq
 from PIL import Image, ExifTags
 
 # --- Configurable constants ---
 MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))  # resize long side to this (px)
-VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.40"))  # label confidence threshold
+VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.40"))
 PAGE_FETCH_TIMEOUT = float(os.getenv("PAGE_FETCH_TIMEOUT", "5"))
 IMAGE_FETCH_TIMEOUT = float(os.getenv("IMAGE_FETCH_TIMEOUT", "10"))
 HTTP_RETRY_COUNT = int(os.getenv("HTTP_RETRY_COUNT", "2"))
@@ -25,7 +27,25 @@ HTTP_RETRY_COUNT = int(os.getenv("HTTP_RETRY_COUNT", "2"))
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("app")
 
+# --- Flask App ---
 app = Flask(__name__)
+
+# --- Rate limiter: limit to 10 requests per minute per IP ---
+limiter = Limiter(
+    app,
+    key_func=get_remote_address,
+    default_limits=["10 per minute"]
+)
+
+# --- Search logging ---
+SEARCH_LOG_FILE = "searches.log"
+def log_search(image_url, page_url, title):
+    try:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        with open(SEARCH_LOG_FILE, "a") as f:
+            f.write(f"{timestamp}\t{image_url}\t{page_url}\t{title}\n")
+    except Exception as e:
+        log.warning("Failed to write search log: %s", e)
 
 # --- Initialize Google Vision client ---
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
@@ -41,10 +61,6 @@ client = Groq(api_key=GROQ_API_KEY)
 
 # ----------------- Utility functions -----------------
 def get_image_bytes(image_url: Optional[str] = None, image_base64: Optional[str] = None) -> bytes:
-    """
-    Fetch image bytes either from a URL or a base64 string.
-    Raises ValueError with contextual message on failure.
-    """
     if image_url:
         headers = {"User-Agent": "product-title-bot/1.0"}
         last_exc = None
@@ -67,10 +83,6 @@ def get_image_bytes(image_url: Optional[str] = None, image_base64: Optional[str]
     raise ValueError("Either image_url or image_base64 must be provided.")
 
 def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> bytes:
-    """
-    Use Pillow to fix orientation and resize the image so that the long side <= max_side.
-    Return JPEG bytes suitable for Vision API.
-    """
     try:
         with Image.open(io.BytesIO(img_bytes)) as im:
             # Fix EXIF orientation if present
@@ -88,7 +100,6 @@ def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> 
                     elif orientation_value == 8:
                         im = im.rotate(90, expand=True)
             except Exception:
-                # silently ignore EXIF issues
                 pass
 
             # Resize if too large
@@ -107,7 +118,7 @@ def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> 
             return out.getvalue()
     except Exception as e:
         log.warning("Image preprocessing failed, returning original bytes: %s", e)
-        return img_bytes  # fallback
+        return img_bytes
 
 def clean_page_url_tokens(page_url: str):
     try:
@@ -159,30 +170,16 @@ def clean_final_title(s: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
-def fallback_title(caption, url_tokens, page_url_tokens, page_text):
-    first_label = caption.split(",")[0] if caption else ""
-    parts = [first_label, url_tokens, page_url_tokens, page_text]
-    combined = " ".join([p for p in parts if p])
-    combined = combined.strip()[:120]
-    return clean_final_title(combined)
-
 def safe_extract_title_from_groq_stream_or_resp(resp_iterable_or_obj) -> str:
-    """
-    Accept either a streaming iterator of chunks or a non-stream response object.
-    Try several shapes safely and return the final text string.
-    """
     raw_text = ""
-    # If iterable (streaming)
     try:
         for chunk in resp_iterable_or_obj:
             try:
                 delta = chunk.choices[0].delta
                 raw_text += delta.content or ""
             except Exception:
-                # skip malformed chunk
                 continue
     except TypeError:
-        # Not iterable: try to parse as single response object
         try:
             if resp_iterable_or_obj and getattr(resp_iterable_or_obj, "choices", None):
                 choice = resp_iterable_or_obj.choices[0]
@@ -205,6 +202,7 @@ def cors_headers(resp):
 
 # ----------------- Main endpoint -----------------
 @app.route("/api/analyze", methods=["POST", "OPTIONS"])
+@limiter.limit("10 per minute")  # rate limit per IP
 def analyze():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -220,73 +218,36 @@ def analyze():
         return jsonify({"error": "imageUrl or imageBase64 required"}), 400
 
     try:
-        # 1️⃣ Load image
+        # --- Load and preprocess image ---
         raw_bytes = get_image_bytes(image_url, image_base64)
-        if not raw_bytes:
-            raise ValueError("Could not load image bytes")
-
-        # 1.1 Preprocess (resize, fix orientation)
         img_bytes = preprocess_image_bytes(raw_bytes)
 
-        # 2️⃣ Google Vision: try label_detection first (non-fatal)
-        labels = []
-        labels_with_confidence = []
-        caption = "Unknown product"
-        vision_method = "label_detection"
+        # --- Google Vision ---
+        labels, labels_with_confidence, caption, vision_method = [], [], "Unknown product", "label_detection"
         try:
             image = vision.Image(content=img_bytes)
             response = vision_client.label_detection(image=image, max_results=10)
-            # handle low-level error
-            if getattr(response, "error", None) and getattr(response.error, "message", None):
-                log.warning("Vision API returned error: %s", response.error.message)
-            else:
-                if getattr(response, "label_annotations", None):
-                    for lab in response.label_annotations:
-                        # candidate: label.description, lab.score (0..1)
-                        name = getattr(lab, "description", None)
-                        score = float(getattr(lab, "score", 0.0))
-                        labels_with_confidence.append({"name": name, "confidence": score})
-                        if score >= VISION_MIN_CONFIDENCE:
-                            labels.append(name)
+            if getattr(response, "label_annotations", None):
+                for lab in response.label_annotations:
+                    name = getattr(lab, "description", None)
+                    score = float(getattr(lab, "score", 0.0))
+                    labels_with_confidence.append({"name": name, "confidence": score})
+                    if score >= VISION_MIN_CONFIDENCE:
+                        labels.append(name)
                 if labels:
                     caption = ", ".join(labels)
-                else:
-                    # keep best label if exists even if below threshold as fallback
-                    if labels_with_confidence:
-                        best = sorted(labels_with_confidence, key=lambda x: x["confidence"], reverse=True)[0]
-                        caption = best["name"] if best.get("name") else caption
+                elif labels_with_confidence:
+                    caption = labels_with_confidence[0]["name"]
         except Exception as e:
-            log.warning("Warning: Google Vision label_detection failed: %s", e)
-
-        # If label detection gave nothing or low confidence, try web_detection as fallback
-        if (not labels) and getattr(response, "label_annotations", None):
-            # already looked at label annotations but low confidences => attempt web_detection
-            try:
-                vision_method = "web_detection"
-                web_resp = vision_client.web_detection(image=image)
-                web = getattr(web_resp, "web_detection", None)
-                web_entities = []
-                if web:
-                    if getattr(web, "best_guess_labels", None):
-                        web_entities.extend([b.label for b in web.best_guess_labels if getattr(b, "label", None)])
-                    if getattr(web, "web_entities", None):
-                        web_entities.extend([we.description for we in web.web_entities if getattr(we, "description", None)])
-                web_entities = [w for w in web_entities if w]
-                if web_entities:
-                    caption = ", ".join(web_entities[:5])
-                    labels = web_entities[:5]
-            except Exception as e:
-                log.info("web_detection fallback failed or returned nothing: %s", e)
+            log.warning("Google Vision label_detection failed: %s", e)
 
         log.info("Vision method: %s; caption: %s", vision_method, caption)
 
-        # 3️⃣ Extract URL tokens
+        # --- URL tokens ---
         url_tokens = clean_url_tokens(image_url) if image_url else ""
-        log.debug("URL Tokens: %s", url_tokens)
-
-        # 4️⃣ Page fetch (non-fatal) and extract title
         page_text = ""
         page_url_tokens = extract_page_product_tokens(page_url) if page_url else ""
+
         if page_url:
             headers = {"User-Agent": "product-title-bot/1.0"}
             last_exc = None
@@ -302,19 +263,19 @@ def analyze():
                     last_exc = e
                     log.warning("Attempt %s: couldn't fetch page_url '%s': %s", attempt + 1, page_url, e)
                     time.sleep(0.2)
-            if not page_text and last_exc:
-                log.info("Page fetch gave no title (last error: %s)", last_exc)
 
-        # 5️⃣ Groq LLM prompt to build product title
+        # --- Groq LLM ---
         system_msg = {
             "role": "system",
             "content": (
-                "You are an assistant that must produce a single concise product title suitable for Amazon search. "
-                "Use the image caption, the URL tokens, and the page URL for context. "
-                "If you know the product title, output it. Otherwise, enhance the caption and URL tokens into a concise title. "
+                "You are an assistant that generates a single concise Amazon product title. "
+                "You are given: image captions, image URL information, and page URL tokens. "
+                "Ignore irrelevant technical words or file names from URLs such as 'png', 'upload', 'wikimedia', numbers, or 'demonstration'. "
+                "Include only the product type, features, color, size, or style relevant to Amazon search. "
                 "Output ONLY the final title."
             )
         }
+
         user_msg = {
             "role": "user",
             "content": (
@@ -322,8 +283,7 @@ def analyze():
                 f"Image URL tokens: {url_tokens}\n"
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
-                "Return a single product title optimized for Amazon search, "
-                "prioritize words from the URL if they clearly indicate the product. Use product codes/size/color/style or anything that clearly defined the product. You should add features in the title and not details"
+                "Return a single product title optimized for Amazon search."
             )
         }
 
@@ -339,8 +299,7 @@ def analyze():
             )
             raw_text = safe_extract_title_from_groq_stream_or_resp(completion)
         except Exception as e:
-            log.warning("Warning: Groq streaming failed: %s", e)
-            # Try non-streaming as fallback
+            log.warning("Groq streaming failed: %s", e)
             try:
                 resp = client.chat.completions.create(
                     model="llama-3.1-8b-instant",
@@ -352,18 +311,18 @@ def analyze():
                 )
                 raw_text = safe_extract_title_from_groq_stream_or_resp(resp)
             except Exception as e2:
-                log.warning("Warning: Groq non-streaming fallback also failed: %s", e2)
-                raw_text = ""
+                log.warning("Groq fallback failed: %s", e2)
 
-        log.debug("Raw Groq output: %s", raw_text)
-
-        # Clean and finalize title
+        # --- Final title ---
         final_title = clean_final_title(raw_text)
         if not final_title:
-            final_title = fallback_title(caption, url_tokens, page_url_tokens, page_text)
+            final_title = labels[0] if labels else "Product"
             log.info("Using fallback title: %s", final_title)
 
         log.info("Final Clean Title: %s", final_title)
+
+        # --- Log searches ---
+        log_search(image_url, page_url, final_title)
 
         return jsonify({
             "caption": caption,
@@ -377,7 +336,6 @@ def analyze():
     except Exception as e:
         log.exception("Error in analyze (unexpected): %s", e)
         return jsonify({"error": str(e)}), 500
-
 
 # --- Run ---
 if __name__ == "__main__":
