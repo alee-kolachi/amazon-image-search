@@ -253,9 +253,9 @@ def analyze():
             "content": (
                 "You are an assistant that generates a single, concise Amazon product title. "
                 "You are given: image captions, page URL, and image URL. "
-                "STRICTLY INCLUDE these attributes if present in the caption: color, size, style, and main features. "
-                "Focus on keywords shoppers would use. Avoid overly long or redundant details. "
-                "Output ONLY the final title in a natural Amazon style (3-6 words preferred)."
+                "STRICTLY INCLUDE the brand/product name if present, and also include these attributes if present: color, size, style, main features. "
+                "Focus on keywords shoppers would use. Avoid irrelevant details, numbers, or technical words from URLs. "
+                "Output ONLY the final title in natural Amazon style, 3-6 words if possible."
             )
         }
 
@@ -266,7 +266,7 @@ def analyze():
                 f"Page URL (send complete URL as-is): {page_url}\n"
                 f"Image URL (send complete URL as-is): {image_url}\n"
                 "Generate a concise, keyword-optimized Amazon product title. "
-                "If the caption lists a color, include it in the title."
+                "If the caption lists a color, size, style, or brand, include them in the title."
             )
         }
 
