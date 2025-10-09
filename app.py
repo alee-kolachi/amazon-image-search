@@ -201,8 +201,8 @@ def analyze():
 
     data = request.get_json(force=True, silent=True) or {}
     image_url = data.get("imageUrl")
-    page_url = data.get("pageUrl", "")
     image_base64 = data.get("imageBase64")
+    page_url = data.get("pageUrl", "")
 
     if not image_url and not image_base64:
         return jsonify({"error": "imageUrl or imageBase64 required"}), 400
@@ -228,25 +228,6 @@ def analyze():
         except Exception as e:
             log.warning("Google Vision label_detection failed: %s", e)
 
-        # --- Page scraping ---
-        page_text = ""
-        if page_url:
-            headers = {"User-Agent": "product-title-bot/1.0"}
-            last_exc = None
-            for attempt in range(HTTP_RETRY_COUNT + 1):
-                try:
-                    r = requests.get(page_url, headers=headers, timeout=PAGE_FETCH_TIMEOUT)
-                    r.raise_for_status()
-                    title_text, description_text = extract_product_info(r.text)
-                    page_text = f"{title_text}. {description_text}" if title_text or description_text else ""
-                    break
-                except Exception as e:
-                    last_exc = e
-                    log.warning("Attempt %s: couldn't fetch page '%s': %s", attempt + 1, page_url, e)
-                    time.sleep(0.2)
-            if not page_text:
-                log.info("Page scraping failed, continuing without page data: %s", last_exc)
-
         # --- Groq LLM ---
         system_msg = {
             "role": "system",
@@ -255,7 +236,7 @@ def analyze():
                 "You are given: image captions, page URL, and image URL. "
                 "Your goal is to understand the product from these inputs and produce a high-quality, natural-sounding Amazon title. "
                 "IMPORTANT: MUST Include brand, color, material, size, style, and main features if they are present."
-                "Always include prominent color when given, this is important"
+                "Always include prominent color when given"
                 "Output ONLY the final title in natural Amazon style, 3-7 words if possible."
             )
         }
@@ -270,10 +251,6 @@ def analyze():
             )
         }
 
-
-
-
-        # --- Log what is being sent to LLM ---
         log.info("Sending to LLM:\nSystem msg: %s\nUser msg: %s", system_msg, user_msg)
 
         raw_text = ""
@@ -302,7 +279,6 @@ def analyze():
             except Exception as e2:
                 log.warning("Groq fallback failed: %s", e2)
 
-        # --- Log what we received from LLM ---
         log.info("LLM returned: %s", raw_text)
 
         # --- Clean and fallback title ---
@@ -330,6 +306,7 @@ def analyze():
     except Exception as e:
         log.exception("Error in analyze (unexpected): %s", e)
         return jsonify({"error": str(e)}), 500
+
 
 # --- Run ---
 if __name__ == "__main__":
