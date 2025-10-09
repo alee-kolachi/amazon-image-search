@@ -30,12 +30,11 @@ log = logging.getLogger("app")
 # --- Flask App ---
 app = Flask(__name__)
 
-# --- Rate limiter: limit to 10 requests per minute per IP ---
 limiter = Limiter(
-    app,
-    key_func=get_remote_address,
-    default_limits=["10 per minute"]
+    key_func=get_remote_address,  # do NOT also pass app as first positional argument
+    default_limits=["200 per day", "50 per hour"]
 )
+limiter.init_app(app)
 
 import csv
 
@@ -271,9 +270,15 @@ def analyze():
         system_msg = {
             "role": "system",
             "content": (
-                "You are an assistant that gives color of product"
+                "You are an assistant that generates a single, concise Amazon product title. "
+                "You are given: image captions, image URL tokens, page URL tokens, and page text. "
+                "IGNORE irrelevant technical words, file names, numbers, or 'demonstration' in URLs. "
+                "INCLUDE the product type, features, color, size, and style relevant to Amazon search. "
+                "ALWAYS include the color from the image caption, even if it is not mentioned in the page URL or text. "
+                "If multiple colors are mentioned in the caption, include the most prominent one or all relevant. "
             )
         }
+
 
 
         user_msg = {
@@ -283,7 +288,7 @@ def analyze():
                 f"Image URL tokens: {url_tokens}\n"
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
-                "Give me color of the product"
+                "Return a single product title optimized for Amazon search."
 
             )
         }
