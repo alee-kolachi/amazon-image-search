@@ -255,7 +255,7 @@ def analyze():
                 "You are given: image captions, page URL, and image URL. "
                 "STRICTLY INCLUDE the brand/product name if present, and also include these attributes if present: color, size, style, main features. "
                 "Focus on keywords shoppers would use. Avoid irrelevant details, numbers, or technical words from URLs. "
-                "Output ONLY the final title in natural Amazon style, 3-6 words if possible."
+                "Output ONLY the final title in natural Amazon style, 3-7 words if possible."
             )
         }
 
