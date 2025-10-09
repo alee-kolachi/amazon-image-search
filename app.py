@@ -123,11 +123,6 @@ def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> 
         return img_bytes
 
 def clean_final_title(s: str) -> str:
-    if not s:
-        return ""
-    s = re.sub(r"https?://\S+|www\.\S+|\bamazon\.com\b", "", s, flags=re.I)
-    s = re.sub(r'[^A-Za-z0-9 \-]', '', s)
-    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 def safe_extract_title_from_groq_stream_or_resp(resp_iterable_or_obj) -> str:
