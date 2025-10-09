@@ -253,21 +253,23 @@ def analyze():
             "content": (
                 "You are an assistant that generates a single, concise Amazon product title. "
                 "You are given: image captions, page URL, and image URL. "
-                "INCLUDE the product type, main features, color, size, and style relevant to Amazon search. "
+                "STRICTLY INCLUDE these attributes if present in the caption: color, size, style, and main features. "
                 "Focus on keywords shoppers would use. Avoid overly long or redundant details. "
-                "Output ONLY the final title in a natural Amazon style."
+                "Output ONLY the final title in a natural Amazon style (3-6 words preferred)."
             )
         }
 
         user_msg = {
             "role": "user",
             "content": (
-                f"Image caption: {caption}\n"
+                f"Image caption (comma-separated attributes): {caption}\n"
                 f"Page URL (send complete URL as-is): {page_url}\n"
                 f"Image URL (send complete URL as-is): {image_url}\n"
-                "Generate a concise, keyword-optimized Amazon product title (3-6 words if possible)."
+                "Generate a concise, keyword-optimized Amazon product title. "
+                "If the caption lists a color, include it in the title."
             )
         }
+
 
         # --- Log what is being sent to LLM ---
         log.info("Sending to LLM:\nSystem msg: %s\nUser msg: %s", system_msg, user_msg)
