@@ -276,7 +276,7 @@ def analyze():
                 "INCLUDE the product type, main features, color, size, and style relevant to Amazon search. "
                 "Focus on keywords that shoppers would use to search. "
                 "Avoid overly long or redundant details. "
-                "Always include the color from the image caption if given"
+                "Always include the color from the image caption if given. Give more focus on page URL but if it doesn't help then you can give focus to the captions"
                 "Output ONLY the final title in a natural Amazon style."
             )
         }
