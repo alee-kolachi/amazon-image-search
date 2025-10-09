@@ -252,22 +252,25 @@ def analyze():
             "role": "system",
             "content": (
                 "You are an assistant that generates a single, concise Amazon product title. "
-                "You are given: image captions, page text, and URL tokens. "
-                "IGNORE irrelevant technical words, file names, numbers, or 'demonstration' in URLs. "
+                "You are given: image captions, page URL, and image URL. "
                 "INCLUDE the product type, main features, color, size, and style relevant to Amazon search. "
                 "Focus on keywords shoppers would use. Avoid overly long or redundant details. "
                 "Output ONLY the final title in a natural Amazon style."
             )
         }
+
         user_msg = {
             "role": "user",
             "content": (
                 f"Image caption: {caption}\n"
-                f"Page URL: {page_url}\n"
-                f"Page text: {page_text}\n"
+                f"Page URL (send complete URL as-is): {page_url}\n"
+                f"Image URL (send complete URL as-is): {image_url}\n"
                 "Generate a concise, keyword-optimized Amazon product title (3-6 words if possible)."
             )
         }
+
+        # --- Log what is being sent to LLM ---
+        log.info("Sending to LLM:\nSystem msg: %s\nUser msg: %s", system_msg, user_msg)
 
         raw_text = ""
         try:
@@ -295,18 +298,28 @@ def analyze():
             except Exception as e2:
                 log.warning("Groq fallback failed: %s", e2)
 
+        # --- Log what we received from LLM ---
+        log.info("LLM returned: %s", raw_text)
+
+        # --- Clean and fallback title ---
         final_title = clean_final_title(raw_text)
         if not final_title:
             final_title = labels[0] if labels else "Product"
             log.info("Using fallback title: %s", final_title)
 
+        # --- Log everything for reference ---
         log_search(image_url, page_url, final_title)
+        log.info(
+            "Search logged:\nImage URL: %s\nPage URL: %s\nCaption: %s\nFinal Title: %s",
+            image_url, page_url, caption, final_title
+        )
 
         return jsonify({
             "caption": caption,
             "vision_method": vision_method,
             "labels_with_confidence": labels_with_confidence,
             "page_url": page_url,
+            "image_url": image_url,
             "title": final_title
         }), 200
 
