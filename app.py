@@ -1,153 +1,76 @@
-# app.py (fixed)
+# app.py (simplified and fixed for extension)
 import os
 import re
 import io
-import time
 import base64
 import logging
-from typing import Optional
 from urllib.parse import urlparse, unquote
-
 import requests
 from flask import Flask, request, jsonify
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from google.cloud import vision
 from groq import Groq
 from PIL import Image, ExifTags
 
-# --- Configurable constants ---
+# --- Config ---
 MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))
-VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.40"))
-PAGE_FETCH_TIMEOUT = float(os.getenv("PAGE_FETCH_TIMEOUT", "5"))
-IMAGE_FETCH_TIMEOUT = float(os.getenv("IMAGE_FETCH_TIMEOUT", "10"))
-HTTP_RETRY_COUNT = int(os.getenv("HTTP_RETRY_COUNT", "2"))
+VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.4"))
+PAGE_FETCH_TIMEOUT = 5.0  # try once only
+IMAGE_FETCH_TIMEOUT = 10.0
 
 # --- Logging ---
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("app")
 
-# --- Flask App ---
+# --- Flask ---
 app = Flask(__name__)
 
-# --- Rate limiter ---
-limiter = Limiter(
-    app,
-    key_func=get_remote_address,
-    default_limits=["10 per minute"]
-)
-
-import csv
-SEARCH_LOG_FILE = "/home/ubuntu/amazon-image-search/searches.csv"
-
-def log_search(image_url, page_url, title):
-    try:
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        with open(SEARCH_LOG_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([timestamp, image_url, page_url, title])
-    except Exception as e:
-        log.warning("Failed to write search log: %s", e)
-
-# --- Google Vision client ---
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if not GOOGLE_APPLICATION_CREDENTIALS:
-    raise ValueError("Please set GOOGLE_APPLICATION_CREDENTIALS environment variable with path to your JSON key.")
+# --- Google Vision ---
 vision_client = vision.ImageAnnotatorClient()
 
-# --- Groq client ---
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise ValueError("Please set GROQ_API_KEY environment variable.")
-client = Groq(api_key=GROQ_API_KEY)
+# --- Groq ---
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# ----------------- Utility functions -----------------
-def get_image_bytes(image_url: Optional[str] = None, image_base64: Optional[str] = None) -> bytes:
+# ---------------- Utilities ----------------
+def get_image_bytes(image_url=None, image_base64=None):
     if image_url:
-        headers = {"User-Agent": "product-title-bot/1.0"}
-        last_exc = None
-        for attempt in range(HTTP_RETRY_COUNT + 1):
-            try:
-                r = requests.get(image_url, headers=headers, timeout=IMAGE_FETCH_TIMEOUT)
-                r.raise_for_status()
-                return r.content
-            except Exception as e:
-                last_exc = e
-                log.warning("Attempt %s: failed to fetch image '%s': %s", attempt + 1, image_url, e)
-                time.sleep(0.3)
-        raise ValueError(f"Failed to fetch image from URL after {HTTP_RETRY_COUNT + 1} attempts: {last_exc}")
-    if image_base64:
         try:
-            b = re.sub(r"^data:image/\w+;base64,", "", image_base64)
-            return base64.b64decode(b)
+            r = requests.get(image_url, timeout=IMAGE_FETCH_TIMEOUT)
+            r.raise_for_status()
+            return r.content
         except Exception as e:
-            raise ValueError(f"Failed to decode base64 image: {e}")
-    raise ValueError("Either image_url or image_base64 must be provided.")
+            raise ValueError(f"Failed to fetch image URL: {e}")
+    if image_base64:
+        b64 = re.sub(r"^data:image/\w+;base64,", "", image_base64)
+        return base64.b64decode(b64)
+    raise ValueError("No image provided")
 
-def preprocess_image_bytes(img_bytes: bytes, max_side: int = MAX_IMAGE_SIDE) -> bytes:
+def preprocess_image(img_bytes):
     try:
         with Image.open(io.BytesIO(img_bytes)) as im:
+            # Fix orientation
             try:
-                for orientation in ExifTags.TAGS.keys():
-                    if ExifTags.TAGS[orientation] == 'Orientation':
-                        break
+                for k, v in ExifTags.TAGS.items():
+                    if v == 'Orientation': orientation_key = k
                 exif = im._getexif()
                 if exif:
-                    o = exif.get(orientation)
+                    o = exif.get(orientation_key)
                     if o == 3: im = im.rotate(180, expand=True)
                     elif o == 6: im = im.rotate(270, expand=True)
                     elif o == 8: im = im.rotate(90, expand=True)
-            except Exception:
-                pass
+            except: pass
+
+            # Resize if large
             w, h = im.size
-            if max(w, h) > max_side:
-                scale = max_side / float(max(w, h))
+            if max(w, h) > MAX_IMAGE_SIDE:
+                scale = MAX_IMAGE_SIDE / float(max(w, h))
                 im = im.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
             if im.mode != "RGB":
                 im = im.convert("RGB")
             out = io.BytesIO()
             im.save(out, format="JPEG", quality=88, optimize=True)
             return out.getvalue()
-    except Exception as e:
-        log.warning("Image preprocessing failed, returning original bytes: %s", e)
+    except:
         return img_bytes
-
-def clean_page_url_tokens(page_url: str):
-    try:
-        p = urlparse(page_url)
-        host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
-        segments = [unquote(s) for s in (p.path or "").split("/") if s]
-        combined = f"{host} {' '.join(segments)}"
-        return re.sub(r"[_\-]+", " ", combined).strip()
-    except Exception:
-        return ""
-
-def extract_page_product_tokens(page_url: str):
-    try:
-        p = urlparse(page_url)
-        segments = [unquote(s) for s in p.path.split("/") if s]
-        host = re.sub(r"^www\.", "", p.netloc or "")
-        tokens = " ".join([host] + segments)
-        tokens = re.sub(r'[\d]+', '', tokens)
-        tokens = re.sub(r'\.html|\.php', '', tokens)
-        tokens = re.sub(r'[-_]+', ' ', tokens)
-        return re.sub(r'\s+', ' ', tokens).strip()
-    except Exception:
-        return ""
-
-def clean_url_tokens(image_url: str):
-    try:
-        p = urlparse(image_url)
-        host = re.sub(r"^www\.", "", p.netloc or "", flags=re.I).replace(".", " ")
-        segments = [unquote(s) for s in (p.path or "").split("/") if s]
-        file_part = segments[-1] if segments else ""
-        base = re.sub(r"\.\w+$", "", file_part)
-        combined = f"{host} {' '.join(segments)} {base}"
-        combined = re.sub(r"[_\-]+", " ", combined)
-        combined = re.sub(r"\b(AC|SX|UX)\d+\b", "", combined)
-        return re.sub(r"\s+", " ", combined).strip()
-    except Exception:
-        return ""
 
 def clean_final_title(s: str) -> str:
     if not s:
@@ -156,123 +79,81 @@ def clean_final_title(s: str) -> str:
     s = re.sub(r'[^A-Za-z0-9 \-]', '', s)
     return re.sub(r'\s+', ' ', s).strip()
 
-def safe_extract_title_from_groq_stream_or_resp(resp_iterable_or_obj) -> str:
+def safe_extract_title(resp) -> str:
+    # Groq streaming or normal response
     raw_text = ""
     try:
-        for chunk in resp_iterable_or_obj:
-            try:
-                delta = chunk.choices[0].delta
-                raw_text += delta.content or ""
-            except Exception:
-                continue
+        for chunk in resp:
+            delta = getattr(chunk.choices[0], "delta", None)
+            if delta and getattr(delta, "content", None):
+                raw_text += delta.content
     except TypeError:
         try:
-            if resp_iterable_or_obj and getattr(resp_iterable_or_obj, "choices", None):
-                choice = resp_iterable_or_obj.choices[0]
+            if resp and getattr(resp, "choices", None):
+                choice = resp.choices[0]
                 if hasattr(choice, "message") and getattr(choice.message, "content", None):
                     raw_text = choice.message.content
                 elif getattr(choice, "text", None):
                     raw_text = choice.text
-        except Exception:
-            raw_text = ""
-    except Exception:
-        raw_text = ""
+        except: raw_text = ""
+    except: raw_text = ""
     return raw_text or ""
 
-# ----------------- CORS -----------------
-@app.after_request
-def cors_headers(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    return resp
+def extract_page_title(page_url: str) -> str:
+    if not page_url:
+        return ""
+    try:
+        r = requests.get(page_url, headers={"User-Agent": "product-title-bot"}, timeout=PAGE_FETCH_TIMEOUT)
+        r.raise_for_status()
+        m = re.search(r'<title>(.*?)</title>', r.text, re.I|re.S)
+        return m.group(1).strip() if m else ""
+    except Exception as e:
+        log.warning("Page fetch failed (ignored): %s", e)
+        return ""
 
-# ----------------- Main endpoint -----------------
-@app.route("/api/analyze", methods=["POST", "OPTIONS"])
-@limiter.limit("10 per minute")
+# ----------------- Endpoint -----------------
+@app.route("/api/analyze", methods=["POST"])
 def analyze():
-    if request.method == "OPTIONS":
-        return ("", 204)
-
     data = request.get_json(force=True, silent=True) or {}
     image_url = data.get("imageUrl")
     page_url = data.get("pageUrl", "")
     image_base64 = data.get("imageBase64")
 
-    page_url_tokens = clean_page_url_tokens(page_url) if page_url else ""
-    log.info("Page URL Tokens: %s", page_url_tokens)
-
     if not image_url and not image_base64:
         return jsonify({"error": "imageUrl or imageBase64 required"}), 400
 
     try:
-        # --- Load and preprocess image ---
-        raw_bytes = get_image_bytes(image_url, image_base64)
-        img_bytes = preprocess_image_bytes(raw_bytes)
+        # --- Image processing ---
+        img_bytes = preprocess_image(get_image_bytes(image_url, image_base64))
 
-        # --- Google Vision ---
-        labels, labels_with_confidence, caption, vision_method = [], [], "Unknown product", "label_detection"
+        # --- Google Vision labels ---
+        labels, caption = [], "Unknown product"
         try:
             image = vision.Image(content=img_bytes)
             response = vision_client.label_detection(image=image, max_results=10)
             for lab in getattr(response, "label_annotations", []):
-                name = getattr(lab, "description", None)
                 score = float(getattr(lab, "score", 0.0))
-                labels_with_confidence.append({"name": name, "confidence": score})
+                name = getattr(lab, "description", None)
                 if score >= VISION_MIN_CONFIDENCE:
                     labels.append(name)
-            caption = ", ".join(labels) if labels else (labels_with_confidence[0]["name"] if labels_with_confidence else caption)
+            caption = ", ".join(labels) if labels else caption
         except Exception as e:
-            log.warning("Google Vision label_detection failed: %s", e)
+            log.warning("Vision failed: %s", e)
 
-        log.info("Vision method: %s; caption: %s", vision_method, caption)
-
-        url_tokens = clean_url_tokens(image_url) if image_url else ""
-        page_text = ""
-        page_url_tokens = extract_page_product_tokens(page_url) if page_url else ""
-
-        # --- Fetch page URL if available ---
-        if page_url:
-            headers = {"User-Agent": "product-title-bot/1.0"}
-            last_exc = None
-            for attempt in range(HTTP_RETRY_COUNT + 1):
-                try:
-                    r = requests.get(page_url, headers=headers, timeout=PAGE_FETCH_TIMEOUT)
-                    r.raise_for_status()
-                    m = re.search(r'<title>(.*?)</title>', r.text, re.I | re.S)
-                    if m:
-                        page_text = m.group(1).strip()
-                    break
-                except Exception as e:
-                    last_exc = e
-                    log.warning("Attempt %s: couldn't fetch page_url '%s': %s", attempt + 1, page_url, e)
-                    time.sleep(0.2)
-            if not page_text:
-                log.info("Page fetch failed or timed out; continuing without page content")
+        # --- Page title ---
+        page_text = extract_page_title(page_url)
 
         # --- Groq LLM ---
         system_msg = {
             "role": "system",
-            "content": (
-                "You are an assistant that generates a single concise Amazon product title. "
-                "You are given: image captions, image URL information, and page URL tokens. "
-                "Ignore irrelevant technical words or file names from URLs such as 'png', 'upload', 'wikimedia', numbers, or 'demonstration'. "
-                "Include only the product type, features, color, size, or style relevant to Amazon search. "
-                "Output ONLY the final title."
-            )
+            "content": "Generate a single concise Amazon product title from image caption, URL tokens, and page title."
         }
-
         user_msg = {
             "role": "user",
-            "content": (
-                f"Image caption: {caption}\n"
-                f"Image URL tokens: {url_tokens}\n"
-                f"Page URL tokens: {page_url_tokens}\n"
-                f"Page title or context: {page_text}\n"
-                "Return a single product title optimized for Amazon search."
-            )
+            "content": f"Image caption: {caption}\nPage title: {page_text}\nReturn a single product title optimized for Amazon search."
         }
 
-        raw_text = ""
+        final_title = "Product"
         try:
             completion = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -280,45 +161,26 @@ def analyze():
                 temperature=0.2,
                 max_completion_tokens=60,
                 top_p=1,
-                stream=True
+                stream=False
             )
-            raw_text = safe_extract_title_from_groq_stream_or_resp(completion)
+            raw_text = safe_extract_title(completion)
+            final_title = clean_final_title(raw_text) or (labels[0] if labels else "Product")
         except Exception as e:
-            log.warning("Groq streaming failed: %s", e)
-            try:
-                resp = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=[system_msg, user_msg],
-                    temperature=0.2,
-                    max_completion_tokens=60,
-                    top_p=1,
-                    stream=False
-                )
-                raw_text = safe_extract_title_from_groq_stream_or_resp(resp)
-            except Exception as e2:
-                log.warning("Groq fallback failed: %s", e2)
-
-        final_title = clean_final_title(raw_text)
-        if not final_title:
+            log.warning("Groq failed, fallback to Vision labels: %s", e)
             final_title = labels[0] if labels else "Product"
-            log.info("Using fallback title: %s", final_title)
 
-        log.info("Final Clean Title: %s", final_title)
-        log_search(image_url, page_url, final_title)
+        log.info("Final title: %s", final_title)
 
         return jsonify({
+            "title": final_title,       # <-- guarantees this key exists
             "caption": caption,
-            "vision_method": vision_method,
-            "labels_with_confidence": labels_with_confidence,
-            "url_tokens": url_tokens,
-            "page_url": page_url,
-            "title": final_title
-        }), 200
+            "page_url": page_url
+        })
 
     except Exception as e:
-        log.exception("Error in analyze (unexpected): %s", e)
+        log.exception("Unexpected error: %s", e)
         return jsonify({"error": str(e)}), 500
 
 # --- Run ---
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 3000)), debug=os.getenv("FLASK_DEBUG", "False") == "True")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 3000)))
