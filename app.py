@@ -1,4 +1,4 @@
-# app.py (simplified and fixed for extension)
+# app.py
 import os
 import re
 import io
@@ -14,7 +14,7 @@ from PIL import Image, ExifTags
 # --- Config ---
 MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1024"))
 VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.4"))
-PAGE_FETCH_TIMEOUT = 5.0  # try once only
+PAGE_FETCH_TIMEOUT = 5.0
 IMAGE_FETCH_TIMEOUT = 10.0
 
 # --- Logging ---
@@ -80,7 +80,6 @@ def clean_final_title(s: str) -> str:
     return re.sub(r'\s+', ' ', s).strip()
 
 def safe_extract_title(resp) -> str:
-    # Groq streaming or normal response
     raw_text = ""
     try:
         for chunk in resp:
@@ -146,7 +145,7 @@ def analyze():
         # --- Groq LLM ---
         system_msg = {
             "role": "system",
-            "content": "Generate a single concise Amazon product title from image caption, URL tokens, and page title."
+            "content": "Generate a single concise Amazon product title from image caption and page title."
         }
         user_msg = {
             "role": "user",
