@@ -276,6 +276,8 @@ def analyze():
                 "INCLUDE the product type, features, color, size, and style relevant to Amazon search. "
                 "ALWAYS include the color from the image caption, even if it is not mentioned in the page URL or text. "
                 "If multiple colors are mentioned in the caption, include the most prominent one or all relevant. "
+                "Output ONLY the final title. Do not add extra words, explanations, or punctuation outside normal title formatting. You can add the color, material, type, ID, etc."
+
             )
         }
 
@@ -288,7 +290,7 @@ def analyze():
                 f"Image URL tokens: {url_tokens}\n"
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
-                "Return a single product title optimized for Amazon search."
+                "Return a single concise product title optimized for Amazon search."
 
             )
         }
