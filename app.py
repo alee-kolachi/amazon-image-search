@@ -272,9 +272,6 @@ def analyze():
             "role": "system",
             "content": (
                 "You are an assistant that generates a single concise Amazon product title. "
-                "You are given: image captions, image URL information, and page URL tokens. "
-                "IGNORE irrelevant technical words or file names from URLs such as 'png', 'upload', 'wikimedia', numbers, or 'demonstration'. "
-                "Output ONLY the final title. Do not add extra words or explanations."
             )
         }
 
