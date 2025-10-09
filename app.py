@@ -282,7 +282,7 @@ def analyze():
         raw_text = ""
         try:
             completion = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="llama-3.3-70b-versatile",
                 messages=[system_msg, user_msg],
                 temperature=0.2,
                 max_completion_tokens=60,
@@ -294,7 +294,7 @@ def analyze():
             log.warning("Groq streaming failed: %s", e)
             try:
                 resp = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
+                    model="llama-3.3-70b-versatile",
                     messages=[system_msg, user_msg],
                     temperature=0.2,
                     max_completion_tokens=60,
