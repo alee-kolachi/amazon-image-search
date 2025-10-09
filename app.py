@@ -283,8 +283,7 @@ def analyze():
                 f"Image URL tokens: {url_tokens}\n"
                 f"Page URL tokens: {page_url_tokens}\n"
                 f"Page title or context: {page_text}\n"
-                "Return a single product title optimized for Amazon search."
-                "INCLUDE the product type, features, color, size, or style relevant to Amazon search. ALWAYS include the color from the image caption in the product title, even if the page URL or page text does not mention it. Do not omit it."
+                "Give me color of the product"
 
             )
         }
