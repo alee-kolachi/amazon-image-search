@@ -255,6 +255,7 @@ def analyze():
                 "You are given: image captions, page URL, and image URL. "
                 "Your goal is to understand the product from these inputs and produce a high-quality, natural-sounding Amazon title. "
                 "IMPORTANT: MUST Include brand, color, material, size, style, and main features if they are present."
+                "Always include prominent color when given, this is important"
                 "Output ONLY the final title in natural Amazon style, 3-7 words if possible."
             )
         }
