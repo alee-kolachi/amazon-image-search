@@ -1,0 +1,49 @@
+Privacy Policy — Quick Amazon Lookup
+Effective date: October 13, 2025
+
+Quick Amazon Lookup helps users quickly search for the same product on Amazon from any e-commerce website.
+
+What this extension does
+
+Detects a product title or name on the current e-commerce page.
+
+Shows a small floating Amazon icon.
+
+
+Data collection
+
+No personal data is collected, stored, or shared.
+
+The extension runs entirely in your browser.
+
+No browsing history, user activity, or identifiers are sent anywhere.
+
+No analytics or tracking of any kind are used.
+
+Permissions
+
+activeTab: used to read the product title from the open page so it can build an Amazon search query.
+
+scripting/content scripts: used to add the floating icon on e-commerce sites.
+
+host permissions: allows the script to run on product pages where the icon should appear.
+
+Remote code
+
+No remote or external code is loaded.
+
+All JavaScript, HTML, and images are included locally in the extension package.
+
+Third-party interaction
+
+When you click the icon, Amazon.com opens in a new tab.
+
+Amazon’s own privacy policy applies to their website and search results.
+
+Contact
+
+For privacy or support questions, email alee.kolachi@gmail.com
+
+Changes
+
+If this policy changes, the effective date will be updated here.
