@@ -1,0 +1,59 @@
+Privacy Policy for Amazon Time Tracker
+Last Updated: October 18, 2025
+Overview
+Amazon Time Tracker is committed to protecting your privacy. This extension operates with complete transparency and respects your data.
+Data Collection
+Amazon Time Tracker collects and stores the following information locally on your device:
+
+Time spent on Amazon websites
+Timestamps of browsing sessions
+Date of each session
+
+Data Storage
+
+All data is stored locally in your browser using Chrome's storage API
+No data is transmitted to external servers
+No data is shared with third parties
+No personal information is collected or stored
+No browsing history or URLs are recorded beyond Amazon domains
+
+Data Usage
+The collected data is used solely for:
+
+Displaying your Amazon browsing time in the extension popup
+Generating session history and daily summaries
+Providing you with insights into your browsing habits
+
+Data Retention
+
+Data older than 30 days is automatically deleted
+You can manually clear all data at any time using the "Clear All History" button
+Uninstalling the extension permanently removes all stored data
+
+Third-Party Services
+
+This extension does not use any third-party analytics services
+This extension does not use any tracking cookies
+This extension does not communicate with external servers
+
+Affiliate Disclosure
+This extension may add an affiliate tag to Amazon product links. This allows the extension developer to earn a small commission from Amazon on qualifying purchases at no additional cost to you. This does not affect the price you pay or the products you see.
+Permissions
+The extension requires the following permissions:
+
+Storage: To save your browsing time data locally
+Host Permissions (Amazon domains): To detect when you're on Amazon and track time accordingly
+
+Your Rights
+You have the right to:
+
+Access your data through the extension interface
+Delete your data at any time
+Uninstall the extension to permanently remove all data
+
+Changes to This Policy
+We may update this privacy policy from time to time. Any changes will be reflected in the "Last Updated" date above.
+Contact
+If you have any questions about this privacy policy, please contact us through the Chrome Web Store support page.
+Consent
+By installing and using Amazon Time Tracker, you consent to this privacy policy.
